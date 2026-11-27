@@ -14,80 +14,95 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract Darsy ZIP
-        shell: bash
+      - name: Extract Darsy project
         run: |
           python - <<'PY'
-          import os
-          import zipfile
+          import os, zipfile
 
           archive = "Darsy-main.zip"
           os.makedirs("extracted", exist_ok=True)
 
-          if not os.path.exists(archive):
-              raise SystemExit("Darsy-main.zip not found!")
+          if not os.path.isfile(archive):
+              raise SystemExit("Darsy-main.zip not found")
 
           with zipfile.ZipFile(archive) as z:
               z.extractall("extracted")
 
-          found = None
-
           for root, dirs, files in os.walk("extracted"):
-              for file in files:
-                  if file.lower().endswith(".zip"):
-                      path = os.path.join(root, file)
+              for name in files:
+                  if name.endswith(".zip"):
+                      path = os.path.join(root, name)
                       try:
                           with zipfile.ZipFile(path) as z:
                               z.extractall(os.path.join(root, "inner"))
                       except zipfile.BadZipFile:
                           pass
 
+          project = None
           for root, dirs, files in os.walk("extracted"):
-              if "main.py" in files:
-                  found = root
+              if "main.py" in files and "pyproject.toml" in files:
+                  project = root
                   break
 
-          if not found:
-              raise SystemExit("Could not find main.py in extracted project!")
+          if not project:
+              raise SystemExit("Flet project not found")
 
           with open("project_path.txt", "w") as f:
-              f.write(os.path.abspath(found))
-
-          print("Project found:", found)
+              f.write(os.path.abspath(project))
           PY
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
-      - name: Set up Java
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Install Flet
+      - name: Install Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.9"
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter
+        run: |
+          flutter --version
+          flutter doctor -v
+          java -version
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flet==1.1.2
           pip install "qrcode[pil]" reportlab Pillow arabic-reshaper python-bidi
 
-      - name: Build Android APK
-        shell: bash
+      - name: Build APK
+        env:
+          CI: "true"
+          FLET_CLI_NO_RICH_OUTPUT: "1"
         run: |
           PROJECT=$(cat project_path.txt)
           cd "$PROJECT"
           flet build apk --verbose
 
-      - name: Rename APK
+      - name: Collect APK
         run: |
           mkdir -p final_apk
-          find extracted -type f -name "*.apk" -exec cp {} final_apk/Darsy.apk \;
-          test -f final_apk/Darsy.apk
+          find extracted -type f -name "*.apk" -print
+          APK=$(find extracted -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "APK file was not generated"
+            exit 1
+          fi
+          cp "$APK" final_apk/Darsy.apk
 
       - name: Upload Darsy APK
         uses: actions/upload-artifact@v4
